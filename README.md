@@ -27,3 +27,6 @@ You stay paired across updates. To remove: `chrome://extensions` → Remove, the
 - Manifest V3 cannot block a navigation before it happens. If a handed-over tab ends up on another site, the gateway notices on its next look and stops controlling it.
 - Chrome puts extension service workers to sleep; the extension wakes about once a minute, so the first command after a long idle can take up to a minute.
 - Files: `manifest.json`, `background.js` (pairing, command loop), `popup.html/js`, `page.js` (page reader that masks password / card fields). This repository is a read-only mirror of the `web/extension` directory of the author's private ai-system repository; it is synced automatically on every change there.
+
+## License
+MIT, see [LICENSE](LICENSE).

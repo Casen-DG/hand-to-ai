@@ -8,21 +8,31 @@ async function render() {
   root.replaceChildren();
   if (!st.paired && !st.pairing) {
     const input = el("input", { value: st.server || "", placeholder: "https://你的网关地址:端口" });
+    const msg = el("div", { style: "color:#b00020;margin-top:6px" });
+    const say = (t) => { msg.textContent = t; };
     root.append(el("div", {}, "输入你的网关地址 (运行 ai gateway url 可以看到):"), input,
       el("button", { textContent: "连接", onclick: async () => {
-        if (!input.value.trim()) return alert("请先填网关地址");
-        const r = await send({ type: "pair", server: input.value.trim().replace(/\/$/, ""), name: navigator.platform });
-        if (!r.ok) return alert("连接失败: " + r.error);
+        const addr = input.value.trim();
+        if (!addr) return say("请先填网关地址");
+        let origin;
+        try { origin = new URL(addr).origin; } catch (e) { return say("网关地址格式不对"); }
+        // ask the browser for access to this ONE address; it must happen here, inside the click, and the background then makes the request
+        let granted = false;
+        try { granted = await chrome.permissions.request({ origins: [origin + "/*"] }); } catch (e) { return say("不能申请权限: " + e.message); }
+        if (!granted) return say("没有访问网关的权限: 你拒绝了浏览器的权限申请, 或地址不是 https://。需要点「允许」才能连接");
+        const r = await send({ type: "pair", server: addr.replace(/\/$/, ""), name: navigator.platform });
+        if (!r.ok) return say(r.error);
         render();
-      } }));
+      } }), msg);
     return;
   }
   if (!st.paired) {
     const poll = async () => {
       const r = await send({ type: "pair-poll" });
-      if (r.status === "approved") return render();
+      if (r.ok && r.status === "approved") return render();
       if (r.ok && r.status === "pending") return setTimeout(poll, 2000);
-      root.replaceChildren(el("div", {}, "配对失败或已过期。"), el("button", { textContent: "重试", onclick: () => chrome.storage.local.set({ pair: null }).then(render) }));
+      const why = r.ok ? "配对码已过期或被拒绝" : r.error;      // an error or an expired / denied code ends the wait; no endless retrying
+      root.replaceChildren(el("div", { style: "color:#b00020" }, "配对失败: " + why), el("button", { textContent: "重试", onclick: () => chrome.storage.local.set({ pair: null }).then(render) }));
     };
     const s = await chrome.storage.local.get("pair");
     root.append(el("div", {}, "在 Mac mini 终端运行:"), el("div", { className: "code", textContent: s.pair ? s.pair.code : "" }),

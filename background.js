@@ -193,14 +193,15 @@ async function run(tabId, op, a) {
 async function loop() {
   if (loopRunning) return;
   loopRunning = true;
+  let failures = 0;
   try {
     for (;;) {
       const st = await get();
       if (!st.token || !Object.keys(st.granted).length) break;
       let r;
-      try { r = await api("/api/ext/poll?wait=20"); } catch (e) { await sleep(5000); continue; }
+      try { r = await api("/api/ext/poll?wait=20"); failures = 0; } catch (e) { if (++failures >= 5) break; await sleep(5000); continue; }      // gateway unreachable: give up, the 1-minute alarm tries again later
       if (r.status === 401 || r.status === 423) { await revokeAllLocal(st); break; }
-      if (r.status !== 200) { await sleep(5000); continue; }
+      if (r.status !== 200) { if (++failures >= 5) break; await sleep(5000); continue; }
       const cmd = r.data.cmd;
       if (!cmd) continue;
       let res;
@@ -229,18 +230,26 @@ chrome.runtime.onMessage.addListener((m, _s, reply) => {
       const local = ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
       if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) return reply({ ok: false, error: "网关地址必须是 https:// (本机调试可用 http://localhost)" });
       m.server = u.origin;
+      if (!(await chrome.permissions.contains({ origins: [m.server + "/*"] }))) return reply({ ok: false, error: "没有访问这个网关地址的权限: 请再点一次「连接」并在浏览器弹窗里选「允许」" });
+      const old = (await get()).server;
       await set({ server: m.server });
-      const r = await api("/api/pair/request", { method: "POST", body: { name: "ext-" + (m.name || "browser") }, server: m.server });
-      if (r.status !== 200) return reply({ ok: false, error: r.data.error || r.status });
-      await set({ pair: { ...r.data, server: m.server } });
-      return reply({ ok: true, code: r.data.code });
+      if (old && old !== m.server) { try { await chrome.permissions.remove({ origins: [old + "/*"] }); } catch (e) {} }      // the address changed: give the old one back
+      try {
+        const r = await api("/api/pair/request", { method: "POST", body: { name: "ext-" + (m.name || "browser") }, server: m.server });
+        if (r.status !== 200) return reply({ ok: false, error: `网关拒绝了请求 (状态 ${r.status}${r.data.error ? ": " + r.data.error : ""})` });
+        await set({ pair: { ...r.data, server: m.server } });
+        return reply({ ok: true, code: r.data.code });
+      } catch (e) { return reply({ ok: false, error: `连不上网关 ${m.server}: 请检查地址是否正确、这台电脑是否已连上 Tailscale (${String(e.message || e).slice(0, 60)})` }); }
     }
     if (m.type === "pair-poll") {
       const st = await get();
-      if (!st.pair) return reply({ ok: false });
-      const r = await api(`/api/pair/status?pair_id=${st.pair.pair_id}&poll_secret=${st.pair.poll_secret}`, { server: st.pair.server });
-      if (r.data.status === "approved" && r.data.token) { await set({ token: r.data.token, pair: null }); checkVersion(); return reply({ ok: true, status: "approved" }); }
-      return reply({ ok: true, status: r.data.status || "pending" });
+      if (!st.pair) return reply({ ok: false, error: "没有进行中的配对" });
+      try {
+        const r = await api(`/api/pair/status?pair_id=${st.pair.pair_id}&poll_secret=${st.pair.poll_secret}`, { server: st.pair.server });
+        if (r.data.status === "approved" && r.data.token) { await set({ token: r.data.token, pair: null }); checkVersion(); return reply({ ok: true, status: "approved" }); }
+        if (r.status !== 200 && r.status !== 404) return reply({ ok: false, error: `网关拒绝了请求 (状态 ${r.status})` });
+        return reply({ ok: true, status: r.data.status || (r.status === 404 ? "expired" : "pending") });
+      } catch (e) { return reply({ ok: false, error: `连不上网关: ${String(e.message || e).slice(0, 60)}` }); }
     }
     if (m.type === "grant") return reply(await grant(m.tabId));
     if (m.type === "revoke") { await revoke(m.tabId); return reply({ ok: true }); }
