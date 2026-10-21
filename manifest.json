@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "交给 AI",
+  "version": "0.2.0",
+  "description": "Hand ONE browser tab to your own AI assistant gateway. Access is requested for that one site only when you click 「交给 AI」 and removed when you take the tab back.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "交给 AI",
+    "default_popup": "popup.html"
+  },
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ]
+}
