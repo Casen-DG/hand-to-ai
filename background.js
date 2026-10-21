@@ -260,3 +260,10 @@ chrome.runtime.onMessage.addListener((m, _s, reply) => {
   })();
   return true;
 });
+
+// ---- side panel: opens on a click on the toolbar icon, and with the keyboard shortcut ----
+chrome.runtime.onInstalled.addListener(() => { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {}); });
+chrome.runtime.onStartup.addListener(() => { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {}); });
+chrome.commands.onCommand.addListener((name, tab) => {
+  if (name === "open-panel" && tab) chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+});
