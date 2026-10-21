@@ -182,6 +182,7 @@ async function run(tabId, op, a) {
     case "screenshot": {      // only ever the visible tab of the window: refuse if the handed-over tab is not the one on screen
       const t = await chrome.tabs.get(tabId);
       if (!t.active) return { ok: false, error: "tab_not_visible" };
+      if (a.vis != null) { await inTab(tabId, (sel) => { const e = document.querySelector(sel); if (e) e.scrollIntoView({ block: "center" }); }, [`[data-wvis="${Number(a.vis)}"]`]); await sleep(400); }
       const url = await chrome.tabs.captureVisibleTab(t.windowId, { format: "jpeg", quality: 55 });
       return { ok: true, b64: url.split(",")[1] };
     }

@@ -45,17 +45,69 @@
                href: t === "a" ? e.href : "", checked: ["checkbox", "radio"].includes(ty) ? !!e.checked : undefined, bare: t === "button" && !e.getAttribute("type") });
   }
   for (const f of document.querySelectorAll("iframe")) if (PAY_HOST.test(f.src || "")) flags.payment = true;
-  const blocks = [];
+  const blocks = [], unread = [];
   let section = "(页面开头)";
-  const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT);
-  const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "SVG", "INPUT", "TEXTAREA", "SELECT", "OPTION"]);
+  // Content that has no text in the page structure: read what the page itself says about it (MathJax / KaTeX / MathML source, alt text, aria-label,
+  // SVG title), otherwise report it in `unread` so the parent can take a screenshot and have a vision model read it.
+  document.querySelectorAll("[data-wvis]").forEach((e) => e.removeAttribute("data-wvis"));
+  const mark = (e, kind, hint) => {
+    if (unread.length >= 12) return;
+    const id = unread.length, r = e.getBoundingClientRect();
+    e.setAttribute("data-wvis", String(id));
+    unread.push({ id, kind, hint: clean(hint).slice(0, 80), w: Math.round(r.width), h: Math.round(r.height) });
+  };
+  const put = (text) => { text = clean(text).slice(0, 600); if (text && !(blocks.length && blocks[blocks.length - 1].text === text)) blocks.push({ section, text }); };
+  const FORMULA = "mjx-container,.katex,.MathJax,.MathJax_Display,.mathjax,math,.mwe-math-element,[data-mathml]";
+  const formulaSource = (e) => {
+    const ann = e.querySelector('annotation[encoding="application/x-tex"]') || e.querySelector("annotation");
+    if (ann && clean(ann.textContent)) return clean(ann.textContent);
+    const m = e.matches("math") ? e : e.querySelector("math");
+    const alt = (m && m.getAttribute("alttext")) || e.getAttribute("aria-label") || e.getAttribute("data-original") || (e.querySelector("[aria-label]") || { getAttribute: () => "" }).getAttribute("aria-label");
+    if (clean(alt)) return clean(alt);
+    const img = e.querySelector("img[alt]") || (e.tagName === "IMG" ? e : null);
+    if (img && clean(img.alt)) return clean(img.alt);
+    const as = e.querySelector("mjx-assistive-mml,.MJX_Assistive_MathML,.katex-mathml");
+    return as ? clean(as.textContent) : "";
+  };
+  const big = (e) => { const r = e.getBoundingClientRect(); return r.width >= 40 && r.height >= 40; };
+  const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "INPUT", "TEXTAREA", "SELECT", "OPTION"]);
+  const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT, { acceptNode(n) {
+    const tag = n.tagName.toLowerCase();
+    if (tag === "script" && /^math\/tex/.test(n.type || "")) { put("[公式] " + n.textContent); return NodeFilter.FILTER_REJECT; }
+    if (SKIP.has(n.tagName)) return NodeFilter.FILTER_REJECT;
+    if (!vis(n)) return NodeFilter.FILTER_REJECT;
+    if (n.matches(FORMULA)) {
+      if (n.matches(".MathJax,.MathJax_Display") && n.nextElementSibling && /^math\/tex/.test(n.nextElementSibling.type || "")) return NodeFilter.FILTER_REJECT;   // MathJax v2: the source script follows
+      const src = formulaSource(n);
+      if (src) put("[公式] " + src); else mark(n, "formula", n.textContent);
+      return NodeFilter.FILTER_REJECT;
+    }
+    if (tag === "img") {
+      const alt = n.getAttribute("alt") || n.getAttribute("title") || n.getAttribute("aria-label");
+      if (clean(alt)) put("[图片: " + alt + "]"); else if (big(n)) mark(n, "image", (n.getAttribute("src") || "").split("/").pop());
+      return NodeFilter.FILTER_REJECT;
+    }
+    if (tag === "canvas") {
+      const lab = n.getAttribute("aria-label") || n.textContent;
+      if (clean(lab)) put("[画布: " + lab + "]"); else if (big(n)) mark(n, "canvas", n.id || "");
+      return NodeFilter.FILTER_REJECT;
+    }
+    if (tag === "svg") {
+      const t = n.querySelector(":scope > title");
+      const lab = n.getAttribute("aria-label") || (t && t.textContent) || "";
+      const txt = [...n.querySelectorAll("text")].map((x) => x.textContent).join(" ");
+      if (clean(lab)) put("[图示: " + lab + "]"); else if (clean(txt)) put("[图示文字: " + txt + "]"); else if (big(n)) mark(n, "svg", "");
+      return NodeFilter.FILTER_REJECT;
+    }
+    return NodeFilter.FILTER_ACCEPT;
+  } });
   for (let n = walker.currentNode; n; n = walker.nextNode()) {
-    if (!(n instanceof Element) || SKIP.has(n.tagName) || !vis(n)) continue;
+    if (!(n instanceof Element)) continue;
     if (/^H[1-6]$/.test(n.tagName)) { section = clean(n.innerText).slice(0, 80) || section; blocks.push({ section, text: "## " + section }); continue; }
     if (["P", "LI", "TD", "TH", "PRE", "BLOCKQUOTE", "FIGCAPTION", "DT", "DD", "SUMMARY", "LABEL", "SPAN", "DIV", "A", "BUTTON"].includes(n.tagName)) {
       const own = clean([...n.childNodes].filter((c) => c.nodeType === 3).map((c) => c.textContent).join(" "));
       if (own.length > 1) blocks.push({ section, text: own.slice(0, 600) });
     }
   }
-  return { title: document.title, url: location.href, elements: els, blocks: blocks.slice(0, 600), flags };
+  return { title: document.title, url: location.href, elements: els, blocks: blocks.slice(0, 600), flags, unread };
 })()
