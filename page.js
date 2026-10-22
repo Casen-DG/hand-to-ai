@@ -140,8 +140,49 @@
     }
     return NodeFilter.FILTER_ACCEPT;
   } });
+  // An option row is ONE block: the row's text, its tick / cross icon, its colour and whether its radio / checkbox is chosen all come from the same
+  // container element, so a mark can never slip onto the neighbouring option. Found from each icon: the nearest ancestor that carries text.
+  const rowText = (r) => {
+    const out = [];
+    const walk = (x) => {
+      if (x.nodeType === 3) { out.push(x.textContent); return; }
+      if (!(x instanceof Element) || SKIP_ROW.has(x.tagName) || !vis(x)) return;
+      if (x.matches(FORMULA)) { const src = formulaSource(x); out.push(src ? " [公式] " + src + " " : " [公式] "); return; }
+      if (x.tagName === "IMG") { const al = clean(x.getAttribute("alt") || x.getAttribute("title")); if (al) out.push(" [图片: " + al + "] "); return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(r);
+    return clean(out.join(" "));
+  };
+  const SKIP_ROW = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "INPUT", "TEXTAREA", "SELECT", "OPTION", "SVG", "svg", "CANVAS"]);
+  const rows = new Map();
+  for (const ic of document.body ? document.body.querySelectorAll("i,span,em,div,svg") : []) {
+    if (!vis(ic) || !iconLabel(ic)) continue;
+    let r = ic.parentElement;
+    while (r && r !== document.body && !rowText(r)) r = r.parentElement;
+    if (!r || r === document.body || rowText(r).length > 300) continue;
+    if (!rows.has(r)) rows.set(r, []);
+    rows.get(r).push(ic);
+  }
+  for (const inp of document.body ? document.body.querySelectorAll("input[type=radio],input[type=checkbox]") : []) {      // every choice is a row, marked or not
+    if (!vis(inp)) continue;
+    let r = inp.parentElement;
+    while (r && r !== document.body && !rowText(r)) r = r.parentElement;
+    if (r && r.tagName === "LABEL" && r.parentElement && r.parentElement !== document.body && r.parentElement.querySelectorAll("input[type=radio],input[type=checkbox]").length === 1) r = r.parentElement;
+    if (!r || r === document.body || rowText(r).length > 300) continue;
+    if (!rows.has(r)) rows.set(r, []);
+  }
+  let rowEl = null;
   for (let n = walker.currentNode; n; n = walker.nextNode()) {
     if (!(n instanceof Element)) continue;
+    if (rowEl && rowEl.contains(n)) continue;
+    if (rows.has(n)) {
+      rowEl = n;
+      const icons = rows.get(n).map((ic) => iconLabel(ic)).join(" ");
+      const chosen = [...n.querySelectorAll("input[type=radio],input[type=checkbox]")].some((x) => x.checked) ? " [已选中]" : "";
+      blocks.push({ section, text: ("[选项行] " + rowText(n)).slice(0, 560) + " " + icons + chosen + stateOf(n) });
+      continue;
+    }
     if (/^H[1-6]$/.test(n.tagName)) { section = clean(n.innerText).slice(0, 80) || section; blocks.push({ section, text: "## " + section }); continue; }
     const ic = iconLabel(n);
     if (ic) { blocks.push({ section, text: ic }); continue; }

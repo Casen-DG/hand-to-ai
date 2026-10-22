@@ -92,7 +92,7 @@ async function render() {
   const say = (t) => { note.textContent = t; };
   const hdr = el("div", { class: "hdr" }, el("div", { class: "row" }, dot, conn, el("span", { class: "mut" }, " · "), tabInfo, handBtn,
     el("button", { onclick: async () => { if (confirm("断开与网关的连接? (已交出的标签页会全部收回)")) { await send({ type: "disconnect" }); render(); } } }, "断开")));
-  root.replaceChildren(...[st.outdated ? el("div", { class: "warn" }, `有新版本 ${st.latest} (当前 ${st.current}), 请 git pull 后重新加载扩展`) : null, hdr, list, reqBox, el("div", { class: "bar" }, note, ta, el("div", { class: "row" }, mode, stopBtn, sendBtn))]);
+  root.replaceChildren(...[st.outdated ? el("div", { class: "warn" }, `有新版本 ${st.latest} (当前 ${st.current}), 请 git pull 后重新加载扩展`) : null, hdr, list, reqBox, el("div", { class: "bar" }, note, ta, el("div", { class: "row" }, mode, stopBtn, sendBtn))].filter(Boolean));   // replaceChildren turns a null into the text "null"
   try { const m = (await chrome.storage.local.get({ panelMode: "act" })).panelMode; mode.value = m; } catch (e) { /* default */ }
   mode.addEventListener("change", () => chrome.storage.local.set({ panelMode: mode.value }));
   const alive = () => my === gen;
