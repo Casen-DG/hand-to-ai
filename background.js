@@ -61,10 +61,10 @@ async function grant(tabId) {
   const tab = await chrome.tabs.get(tabId);
   if (!/^https?:/.test(tab.url || "")) return { ok: false, error: "only http(s) pages" };
   if (!(await chrome.permissions.contains({ origins: [originOf(tab.url)] }))) return { ok: false, error: "no site permission (click again and allow)" };
-  const r = await api("/api/ext/grant", { method: "POST", body: { tab_id: tabId, url: tab.url, title: tab.title || "" } });
+  const r = await api("/api/ext/grant", { method: "POST", body: { tab_id: tabId, url: tab.url, title: (tab.title && !/^(null|undefined)$/i.test(tab.title)) ? tab.title : "" } });
   if (r.status !== 200) return { ok: false, error: r.data.error || r.status };
   const st = await get();
-  st.granted[tabId] = { url: tab.url, title: tab.title, origin: originOf(tab.url) };
+  st.granted[tabId] = { url: tab.url, title: (tab.title && !/^(null|undefined)$/i.test(tab.title)) ? tab.title : new URL(tab.url).hostname, origin: originOf(tab.url) };
   await set({ granted: st.granted });
   await mark(tabId, true);
   loop();

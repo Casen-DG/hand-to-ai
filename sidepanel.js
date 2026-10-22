@@ -107,7 +107,10 @@ async function render() {
     if (/^https?:/i.test(t.url) && !STORE.test(t.url)) return "ok";
     return "restricted";
   }
-  const tabName = (t) => String((t && t.title) || (() => { try { return new URL(t.url).hostname; } catch (e) { return ""; } })() || "当前页面").slice(0, 30);
+  const goodText = (x) => (typeof x === "string" && x.trim() && !/^(null|undefined)$/i.test(x.trim()) ? x.trim() : "");
+  const hostOf = (u) => { try { return new URL(u).hostname; } catch (e) { return ""; } };
+  // title: the tab's own, else what was stored when it was handed over, else the host name, never "null"
+  const tabName = (t) => (goodText(t && t.title) || goodText((S.granted[t && t.id] || {}).title) || hostOf(t && t.url) || hostOf((S.granted[t && t.id] || {}).url) || "当前页面").slice(0, 30);
   async function allowUrls() { try { return await chrome.permissions.request({ permissions: ["tabs"] }); } catch (e) { return false; } }
   async function refreshTab() {
     const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

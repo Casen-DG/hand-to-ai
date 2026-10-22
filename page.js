@@ -69,6 +69,45 @@
     const as = e.querySelector("mjx-assistive-mml,.MJX_Assistive_MathML,.katex-mathml");
     return as ? clean(as.textContent) : "";
   };
+  // Visual state that plain text loses: right / wrong marks, red / green, tick and cross icons, highlights. Read from class names, aria attributes,
+  // icon alt text and computed colours, and appended to the text it belongs to as 「[标记: ...]」.
+  const STATE_RE = /(^|[\s_-])(in-?correct|wrong|error|fail(ed|ure)?|invalid|danger|incorrect-answer|correct|right|success|valid|pass(ed)?|selected|checked|chosen|highlight(ed)?|active|missed|unanswered|partial)([\s_-]|$)/i;
+  const ICON_RE = /(fa-check|fa-times|fa-xmark|fa-close|fa-circle-check|fa-circle-xmark|glyphicon-(ok|remove)|icon-?(check|tick|cross|close|correct|wrong|ok|x)|mdi-(check|close)|bi-(check|x)|check-?mark|checkmark|tick|cross)/i;
+  const colorOf = (c) => {
+    const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/.exec(c || "");
+    if (!m || (m[4] !== undefined && parseFloat(m[4]) < 0.3)) return "";
+    const r = +m[1], g = +m[2], b = +m[3];
+    if (r > 150 && g < 100 && b < 100) return "红色";
+    if (g > 110 && r < 100 && b < 120 && g - r > 40) return "绿色";
+    return "";
+  };
+  const stateOf = (e) => {
+    const tags = [];
+    for (let a = e, d = 0; a && a !== document.body && d < 3; a = a.parentElement, d++) {
+      const cls = typeof a.className === "string" ? a.className : "";
+      const m = cls.split(/\s+/).filter((c) => STATE_RE.test(c) || STATE_RE.test(" " + c + " "));
+      if (m.length) tags.push("class=" + m.slice(0, 3).join("/"));
+      for (const k of ["aria-invalid", "aria-checked", "aria-selected", "aria-current", "data-correct", "data-state", "data-status", "data-result"]) {
+        const v = a.getAttribute(k); if (v && v !== "false") tags.push(k + "=" + v);
+      }
+      const t = a.getAttribute("title"); if (a !== e && t && /correct|wrong|right|incorrect|正确|错误|对|错/i.test(t)) tags.push("title=" + t);
+      if (tags.length) break;
+    }
+    const cs = getComputedStyle(e);
+    let col = colorOf(cs.color) ? "文字" + colorOf(cs.color) : "";
+    if (!col) for (let a = e, d = 0; a && a !== document.body && d < 3; a = a.parentElement, d++) { const bg = colorOf(getComputedStyle(a).backgroundColor); if (bg) { col = "底色" + bg; break; } }
+    if (col) tags.push(col);
+    return tags.length ? " [标记: " + [...new Set(tags)].slice(0, 4).join(", ") + "]" : "";
+  };
+  const iconLabel = (e) => {
+    if (!(e.tagName === "I" || e.tagName === "SPAN" || e.tagName === "EM" || e.tagName === "DIV")) return "";
+    if (clean(e.textContent) || e.children.length > 1) return "";
+    const cls = typeof e.className === "string" ? e.className : "";
+    const al = e.getAttribute("aria-label") || e.getAttribute("title") || (e.querySelector("title") || {}).textContent || e.getAttribute("alt") || "";
+    if (clean(al)) return "[图标: " + clean(al) + stateOf(e) + "]";
+    if (ICON_RE.test(cls)) return "[图标: " + (/times|xmark|close|remove|cross|wrong|\bx\b/i.test(cls) ? "叉 (错)" : "勾 (对)") + " class=" + cls.slice(0, 40) + stateOf(e) + "]";
+    return "";
+  };
   const big = (e) => { const r = e.getBoundingClientRect(); return r.width >= 40 && r.height >= 40; };
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "INPUT", "TEXTAREA", "SELECT", "OPTION"]);
   const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT, { acceptNode(n) {
@@ -84,7 +123,7 @@
     }
     if (tag === "img") {
       const alt = n.getAttribute("alt") || n.getAttribute("title") || n.getAttribute("aria-label");
-      if (clean(alt)) put("[图片: " + alt + "]"); else if (big(n)) mark(n, "image", (n.getAttribute("src") || "").split("/").pop());
+      if (clean(alt)) put("[图片: " + alt + "]" + stateOf(n)); else if (big(n)) mark(n, "image", (n.getAttribute("src") || "").split("/").pop());
       return NodeFilter.FILTER_REJECT;
     }
     if (tag === "canvas") {
@@ -104,9 +143,12 @@
   for (let n = walker.currentNode; n; n = walker.nextNode()) {
     if (!(n instanceof Element)) continue;
     if (/^H[1-6]$/.test(n.tagName)) { section = clean(n.innerText).slice(0, 80) || section; blocks.push({ section, text: "## " + section }); continue; }
+    const ic = iconLabel(n);
+    if (ic) { blocks.push({ section, text: ic }); continue; }
     if (["P", "LI", "TD", "TH", "PRE", "BLOCKQUOTE", "FIGCAPTION", "DT", "DD", "SUMMARY", "LABEL", "SPAN", "DIV", "A", "BUTTON"].includes(n.tagName)) {
       const own = clean([...n.childNodes].filter((c) => c.nodeType === 3).map((c) => c.textContent).join(" "));
-      if (own.length > 1) blocks.push({ section, text: own.slice(0, 600) });
+      const st = own && blocks.length < 500 ? stateOf(n) : "";
+      if (own.length > 1 || (own && st)) blocks.push({ section, text: own.slice(0, 560) + st });
     }
   }
   return { title: document.title, url: location.href, elements: els, blocks: blocks.slice(0, 600), flags, unread };
