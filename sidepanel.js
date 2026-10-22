@@ -1,5 +1,6 @@
 "use strict";
-// Side panel: pairing, hand-over of the current tab, and the chat with the assistant (its own conversation (separate from the phone's iMessage)).
+// Side panel: pairing, hand-over of the current tab, and the chat with the assistant. Every browser tab has its OWN conversation (the panel follows the
+// active tab); conversations share nothing with each other or with the phone, except long-term memory and task material.
 // Everything that comes from the server (model replies, page titles, task steps) is shown with text nodes only; links are made only from http(s) URLs;
 // a confirmation is a trusted click on a request card the server created, never something a message can trigger.
 const root = document.getElementById("root");
@@ -28,6 +29,7 @@ const linkify = (text) => {
 
 let gen = 0;              // bumped whenever the view is rebuilt; old loops see it and stop
 const S = { tab: null, granted: {}, active: null, online: null, locked: false };
+const C = { chan: null, last: 0, first: true, abort: null, tabId: null };       // the conversation being shown; the chat loop restarts from 0 when it changes
 
 async function api(path, { method = "GET", body, signal } = {}) {
   const st = await chrome.storage.local.get({ server: "", token: "" });
@@ -85,12 +87,13 @@ async function render() {
   if (!st.paired) return pairingView(st);
   const list = el("div", { id: "list" }), reqBox = el("div", {}), note = el("div", { class: "note" });
   const dot = el("span", { class: "dot" }), conn = el("span", {}, "连接中…"), tabInfo = el("span", { class: "mut" }), handBtn = el("button", {}, "");
+  const convTitle = el("strong", { class: "convtitle" }, "…"), banner = el("div", { class: "warn hidden" }), newBtn = el("button", {}, "新对话");
   const mode = el("select", {}, el("option", { value: "act" }, "操作当前页面"), el("option", { value: "read" }, "问当前页面"), el("option", { value: "chat" }, "普通聊天"));
   const stopBtn = el("button", { class: "danger hidden", onclick: async () => { await api("/api/web/stop", { method: "POST", body: {} }); say("已请求停止"); } }, "停止");
   const ta = el("textarea", { rows: 2, placeholder: "输入指令 (默认操作当前页面; 任务提问时直接在这里回答); Enter 发送, Shift+Enter 换行" });
   const sendBtn = el("button", { class: "primary" }, "发送");
   const say = (t) => { note.textContent = t; };
-  const hdr = el("div", { class: "hdr" }, el("div", { class: "row" }, dot, conn, el("span", { class: "mut" }, " · "), tabInfo, handBtn,
+  const hdr = el("div", { class: "hdr" }, el("div", { class: "row" }, convTitle, newBtn), banner, el("div", { class: "row" }, dot, conn, el("span", { class: "mut" }, " · "), tabInfo, handBtn,
     el("button", { onclick: async () => { if (confirm("断开与网关的连接? (已交出的标签页会全部收回)")) { await send({ type: "disconnect" }); render(); } } }, "断开")));
   root.replaceChildren(...[st.outdated ? el("div", { class: "warn" }, `有新版本 ${st.latest} (当前 ${st.current}), 请 git pull 后重新加载扩展`) : null, hdr, list, reqBox, el("div", { class: "bar" }, note, ta, el("div", { class: "row" }, mode, stopBtn, sendBtn))].filter(Boolean));   // replaceChildren turns a null into the text "null"
   try { const m = (await chrome.storage.local.get({ panelMode: "act" })).panelMode; mode.value = m; } catch (e) { /* default */ }
@@ -124,9 +127,31 @@ async function render() {
       : st === "restricted" ? "这是浏览器内部页面, 不能交给 AI, 只能普通聊天"
       : "没有打开的页面, 只能普通聊天";
     tabInfo.className = mine ? "on" : "mut";
+    convTitle.textContent = S.tab ? tabName(S.tab) : "没有打开的页面";
+    await syncConv();
     handBtn.classList.toggle("hidden", !mine);
     handBtn.textContent = "收回";
     handBtn.onclick = async () => { await send({ type: "revoke", tabId: S.tab.id }); refreshTab(); };
+  }
+  // the conversation of the active tab: asked from the server (created on first use); a different site in the same tab asks the user what to do
+  let askedFor = "";
+  async function syncConv(action = "open") {
+    if (!S.tab || S.tab.id == null) return;
+    const r = await api("/api/ext/conv", { method: "POST", body: { tab_id: S.tab.id, url: typeof S.tab.url === "string" ? S.tab.url : "", title: goodText(S.tab.title), action } });
+    if (!alive() || !r.ok) return;
+    if (r.data.channel !== C.chan) switchConv(r.data.channel, S.tab.id);
+    banner.classList.toggle("hidden", !r.data.changed);
+    if (r.data.changed && askedFor !== r.data.cid + hostOf(S.tab.url)) {
+      askedFor = r.data.cid + hostOf(S.tab.url);
+      banner.replaceChildren(el("div", {}, `页面已变化: 这个标签页之前在「${r.data.prev_title || r.data.prev_host}」, 现在是「${tabName(S.tab)}」。`),
+        el("div", { class: "row" }, el("button", { class: "primary", onclick: () => syncConv("new") }, "开始新对话"), el("button", { onclick: () => syncConv("continue") }, "继续当前对话")));
+    }
+  }
+  newBtn.addEventListener("click", () => { if (S.tab) { banner.classList.add("hidden"); syncConv("new"); } });
+  function switchConv(chan, tabId) {
+    if (C.abort) C.abort.abort();
+    Object.assign(C, { chan, tabId, last: 0, first: true, abort: new AbortController() });
+    list.replaceChildren(); reqBox.replaceChildren(); reqBox.dataset.ids = ""; S.active = null;
   }
   chrome.tabs.onActivated.addListener(() => alive() && refreshTab());
   chrome.tabs.onUpdated.addListener((id, info) => { if (alive() && (info.status === "complete" || info.title)) refreshTab(); });
@@ -163,8 +188,9 @@ async function render() {
     }
     sendBtn.disabled = true;
     try {
-      const r = await api("/api/chat", { method: "POST", body: { text, mode: m, ...(m !== "chat" ? { tab: { tab_id: tab.id } } : {}) } });
-      if (r.ok) { ta.value = ""; say(""); } else if (r.status !== 423) say("发送失败: " + (r.data.error || r.status));
+      if (!C.chan) await syncConv();
+      const r = await api("/api/chat", { method: "POST", body: { text, mode: m, channel: C.chan, ...(m !== "chat" ? { tab: { tab_id: tab.id } } : {}) } });
+      if (r.ok) { ta.value = ""; say(""); } else if (r.status === 409 && r.data.error === "no_conversation") { await syncConv(); say("这个对话已结束, 已切换到当前标签页的对话, 请再发一次"); } else if (r.status !== 423) say("发送失败: " + (r.data.error || r.status));
     } catch (e) { say("连不上网关: 请检查 Tailscale 和网关地址"); }
     sendBtn.disabled = false;
     ta.focus();
@@ -192,22 +218,29 @@ async function render() {
     return el("div", { class: "msg " + (m.role === "user" ? "user" : "bot") }, el("small", {}, [SRC[m.source] || "助手", hhmm(m.ts)].filter(Boolean).join(" · ")), linkify(m.text));
   }
 
-  // chat loop (long poll)
+  // chat loop (long poll) of the conversation being shown
   (async () => {
-    let last = 0, first = true, wait = 1000;
+    let wait = 1000;
     while (alive()) {
+      if (!C.chan) { await sleep(300); continue; }
+      const chan = C.chan, ctl = C.abort;
       try {
-        const r = await api(`/api/chat?since=${last}&wait=20${first ? "&tail=1" : ""}`);
+        const r = await api(`/api/chat?channel=${encodeURIComponent(chan)}&since=${C.last}&wait=20${C.first ? "&tail=1" : ""}`, { signal: ctl.signal });
         if (!alive()) return;
+        if (chan !== C.chan) continue;          // the user moved to another tab while this was waiting
         if (r.status === 423) return;
         if (r.status === 401) { dot.className = "dot bad"; conn.textContent = "连接已失效, 请断开后重新连接"; return; }
         if (!r.ok) throw new Error("status " + r.status);
         dot.className = "dot ok"; conn.textContent = "已连接"; S.online = true; wait = 1000;
-        const stick = first || list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-        for (const m of r.data.messages) list.append(await node(m));
-        last = r.data.last; first = false;
+        const stick = C.first || list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+        const nodes = [];
+        for (const m of r.data.messages) nodes.push(await node(m));
+        if (chan !== C.chan) continue;
+        list.append(...nodes);
+        C.last = r.data.last; C.first = false;
         if (stick) list.scrollTop = list.scrollHeight;
       } catch (e) {
+        if (e && e.name === "AbortError") continue;
         dot.className = "dot bad"; conn.textContent = "连接中断, 重试中…"; S.online = false;
         await sleep(wait); wait = Math.min(wait * 2, 15000);
       }
@@ -240,8 +273,10 @@ async function render() {
   }
   async function loadSide() {
     try {
-      const [rq, stt] = await Promise.all([api("/api/requests"), api("/api/chat/state")]);
-      if (!alive() || !rq.ok) return;
+      if (!C.chan) return;
+      const chan = C.chan, q = "?channel=" + encodeURIComponent(chan);
+      const [rq, stt] = await Promise.all([api("/api/requests" + q), api("/api/chat/state" + q)]);
+      if (!alive() || !rq.ok || chan !== C.chan) return;
       const ids = rq.data.requests.map((r) => r.id).join();
       if (reqBox.dataset.ids !== ids) { reqBox.dataset.ids = ids; reqBox.replaceChildren(...rq.data.requests.map(card)); }
       S.active = stt.data.active || null;

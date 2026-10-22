@@ -31,3 +31,4 @@ button.danger{background:var(--red);color:#fff;border-color:var(--red)}
 button:disabled{opacity:.5;cursor:default}
 .code{font-size:28px;letter-spacing:4px;font-weight:600;margin:6px 0}
 .warn{background:#fff3cd;color:#533f03;padding:6px;border-radius:4px;margin:6px 10px}
+.convtitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}

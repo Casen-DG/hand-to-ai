@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "交给 AI",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "description": "Chat with your own AI assistant gateway in a side panel and hand it ONE browser tab at a time. Site access is requested for that one site only when you hand a tab over, and removed when you take it back.",
   "minimum_chrome_version": "116",
   "permissions": [

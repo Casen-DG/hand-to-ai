@@ -96,13 +96,25 @@ async function revokeAll() {
 }
 
 // the tab closed, or the server dropped it (revoked in the control center, expired, /lock): forget it here too
-chrome.tabs.onRemoved.addListener((id) => revoke(id));
+chrome.tabs.onRemoved.addListener((id) => { revoke(id); closeConv(id); });
+// the tab's conversation is archived by the assistant (it can be found again with /history)
+async function closeConv(tabId) {
+  const st = await get();
+  if (!st.token) return;
+  try { await api("/api/ext/conv/close", { method: "POST", body: { tab_id: tabId } }); } catch (e) { /* the next sync closes it */ }
+}
+async function syncConvs() {      // after a browser restart the old tab ids are gone: close their conversations
+  const st = await get();
+  if (!st.token) return;
+  try { await api("/api/ext/conv/close", { method: "POST", body: { tabs: (await chrome.tabs.query({})).map((t) => t.id) } }); } catch (e) { /* retry later */ }
+}
 async function syncState() {
   const st = await get();
   if (!st.token) return;
   const r = await api("/api/ext/state");
   if (r.status === 401 || r.status === 423) { await revokeAllLocal(st); return; }
   if (r.status !== 200) return;
+  syncConvs();
   const live = new Set(r.data.tabs.map((t) => String(t.tab_id)));
   for (const id of Object.keys(st.granted)) if (!live.has(id)) { const g = st.granted[id]; delete st.granted[id]; await mark(Number(id), false); await dropOrigin(g.origin, st.granted); }
   await set({ granted: st.granted });
