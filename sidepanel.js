@@ -98,13 +98,28 @@ async function render() {
   const alive = () => my === gen;
 
   // current tab + hand-over state
+  // Without the `tabs` permission Chrome hides url/title of the current tab (only activeTab, which a side panel does not keep, would show them).
+  // So "url unknown" is its own state: never treated as a restricted page. `tabs` is an optional permission asked for on a click.
+  const STORE = /^https?:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|microsoftedge\.microsoft\.com\/addons)\//i;
+  function tabState(t) {
+    if (!t) return "none";
+    if (typeof t.url !== "string" || !t.url) return "unknown";
+    if (/^https?:/i.test(t.url) && !STORE.test(t.url)) return "ok";
+    return "restricted";
+  }
+  const tabName = (t) => String((t && t.title) || (() => { try { return new URL(t.url).hostname; } catch (e) { return ""; } })() || "当前页面").slice(0, 30);
+  async function allowUrls() { try { return await chrome.permissions.request({ permissions: ["tabs"] }); } catch (e) { return false; } }
   async function refreshTab() {
     const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     S.tab = t || null;
     S.granted = (await send({ type: "state" })).granted || {};
-    const ok = S.tab && /^https?:/.test(S.tab.url || "");
-    const mine = ok && S.granted[S.tab.id];
-    tabInfo.textContent = ok ? (S.tab.title || S.tab.url).slice(0, 30) + (mine ? " · 已交给 AI" : " · 未交出") : "当前页面不能交给 AI";
+    const st = tabState(S.tab);
+    const mine = st !== "none" && S.granted[S.tab.id];
+    tabInfo.textContent = mine ? tabName(S.tab) + " · 已交给 AI"
+      : st === "ok" ? tabName(S.tab) + " · 未交出"
+      : st === "unknown" ? "还没读到当前页面的网址 (发送页面指令时会请求权限)"
+      : st === "restricted" ? "这是浏览器内部页面, 不能交给 AI, 只能普通聊天"
+      : "没有打开的页面, 只能普通聊天";
     tabInfo.className = mine ? "on" : "mut";
     handBtn.classList.toggle("hidden", !mine);
     handBtn.textContent = "收回";
@@ -118,10 +133,21 @@ async function render() {
   async function sendMessage() {
     const text = ta.value.trim();
     if (!text || sendBtn.disabled) return;
-    const m = text.startsWith("/") || S.active ? "chat" : mode.value;          // a running task: this is an answer or a stop, not a new page command
+    const mode0 = text.startsWith("/") || S.active ? "chat" : mode.value;          // a running task: this is an answer or a stop, not a new page command
     const tab = S.tab;
+    let m = mode0;
+    if (m !== "chat" && !(tab && S.granted[tab.id])) {
+      if (tabState(tab) === "unknown") {
+        if (!(await allowUrls())) return say("没有得到读取网址的权限, 发不出页面指令; 可以切到「普通聊天」。");       // first await: needs the click / Enter
+        await refreshTab();
+        return say("已允许读取网址。请再发送一次, 浏览器会接着询问这个网站的访问授权。");
+      }
+      if (tabState(tab) !== "ok") {         // chrome:// pages and the like: the input still works, as plain chat
+        m = "chat";
+        list.append(el("div", { class: "note" }, "当前页面不能交给 AI, 这条按普通聊天发送"));
+      }
+    }
     if (m !== "chat") {
-      if (!tab || !/^https?:/.test(tab.url || "")) return say("当前页面不能交给 AI (只能 http/https 网页); 可以切到「普通聊天」。");
       if (!S.granted[tab.id]) {
         let ok = false;
         try { ok = await chrome.permissions.request({ origins: [new URL(tab.url).origin + "/*"] }); } catch (e) { /* denied */ }       // must be the first await: it needs the click / Enter
