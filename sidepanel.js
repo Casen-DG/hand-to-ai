@@ -1,5 +1,5 @@
 "use strict";
-// Side panel: pairing, hand-over of the current tab, and the chat with the assistant (the same conversation as iMessage and the control center).
+// Side panel: pairing, hand-over of the current tab, and the chat with the assistant (its own conversation (separate from the phone's iMessage)).
 // Everything that comes from the server (model replies, page titles, task steps) is shown with text nodes only; links are made only from http(s) URLs;
 // a confirmation is a trusted click on a request card the server created, never something a message can trigger.
 const root = document.getElementById("root");
@@ -223,8 +223,18 @@ async function render() {
       if (!x.ok && x.status !== 423) say(x.data.reason === "retype_mismatch" ? "高风险操作需要再输入一次确认文字" : "没有处理成功: " + (x.data.reason || x.status));
       else loadSide();
     };
-    const c = el("div", { class: "req" }, el("strong", {}, r.title), el("pre", {}, r.detail), retype,
-      el("div", { class: "row" }, el("button", { class: "primary", onclick: decide("approve") }, "确认"), el("button", { onclick: decide("deny") }, "取消")));
+    // a multiple-choice card (devflow step report): one button per option the server listed; an option marked `note` also sends the typed opinion
+    const note = el("input", { placeholder: "重做的意见 (可留空)", class: Array.isArray(r.options) && r.options.some((o) => o.note) ? "" : "hidden" });
+    const choose = (id) => async (ev) => {
+      if (!ev.isTrusted) return;
+      const x = await api(`/api/requests/${encodeURIComponent(r.id)}/resolve`, { method: "POST", body: { decision: "choose", choice: id, note: note.value } });
+      if (!x.ok && x.status !== 423) say("没有处理成功: " + (x.data.reason || x.status));
+      else loadSide();
+    };
+    const buttons = Array.isArray(r.options) && r.options.length
+      ? [note, el("div", { class: "row" }, r.options.map((o, i) => el("button", { class: i === 0 ? "primary" : "", onclick: choose(o.id) }, o.label)))]
+      : [retype, el("div", { class: "row" }, el("button", { class: "primary", onclick: decide("approve") }, "确认"), el("button", { onclick: decide("deny") }, "取消"))];
+    const c = el("div", { class: "req" }, el("strong", {}, r.title), el("pre", {}, r.detail), ...buttons);
     if (SHOT_RE.test(r.screenshot || "")) shotImg(r.screenshot).then((i) => c.insertBefore(i, c.children[2]));
     return c;
   }
