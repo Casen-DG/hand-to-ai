@@ -12,6 +12,7 @@ async function api(path, { method = "GET", body, token, server } = {}) {
   const r = await fetch((server || st.server) + path, {
     method, headers: { "Content-Type": "application/json", ...(token ?? st.token ? { Authorization: "Bearer " + (token ?? st.token) } : {}) },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(40000),          // a hung connection must not leave the command loop waiting forever (the poll itself lasts 20 s)
   });
   let data = {};
   try { data = await r.json(); } catch (e) {}
@@ -254,17 +255,26 @@ async function loop() {
     }
   } finally { loopRunning = false; }
 }
-chrome.alarms.create("sync", { periodInMinutes: 1 });
+// Keep-alive: Chrome puts the service worker to sleep and an unreachable gateway ends the loop, so the command loop is (re)started from every place that can
+// wake the worker: the script itself (each time Chrome starts it), a half-minute alarm, browser start, and every message from the side panel. The loop is
+// started BEFORE the housekeeping and the housekeeping can never stop it (an exception in syncState used to leave the loop dead until the next wake).
+const kick = () => { loop().catch(() => {}); };
+chrome.alarms.create("sync", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async () => {
-  await syncState(); loop();
-  const { versionChecked } = await chrome.storage.local.get({ versionChecked: 0 });
-  if (Date.now() - versionChecked > 6 * 3600 * 1000) checkVersion();
+  kick();
+  try { await syncState(); } catch (e) {}
+  try {
+    const { versionChecked } = await chrome.storage.local.get({ versionChecked: 0 });
+    if (Date.now() - versionChecked > 6 * 3600 * 1000) checkVersion();
+  } catch (e) {}
 });
-chrome.runtime.onStartup.addListener(() => { syncState().then(loop); checkVersion(); });
+chrome.runtime.onStartup.addListener(() => { kick(); syncState().catch(() => {}); checkVersion(); });
+kick();
 chrome.runtime.onInstalled.addListener(() => { checkVersion(); });
 
 // ---- messages from the popup ----
 chrome.runtime.onMessage.addListener((m, _s, reply) => {
+  kick();
   (async () => {
     if (m.type === "pair") {
       let u;

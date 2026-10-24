@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "交给 AI",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Chat with your own AI assistant gateway in a side panel. Once paired, the assistant can open, read and operate pages in this browser directly (buying, sending, submitting, deleting still ask you first on your phone or in the panel).",
   "minimum_chrome_version": "116",
   "permissions": [
