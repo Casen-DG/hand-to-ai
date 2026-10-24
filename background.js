@@ -1,5 +1,6 @@
-// Service worker: pairing, the command loop, and the per-tab hand-over. Nothing here acts on a tab that is not in `granted`
-// (which mirrors the gateway's list), and the server applies the real policy (domains, passwords, confirmations) before sending a command.
+// Service worker: pairing, the command loop, and the optional per-tab marking. Once the browser is paired the assistant may drive any tab of it (open,
+// read, screenshot, scroll, click, fill, switch tabs, visit any site); commands only come from the paired gateway and the server applies the real policy
+// (password / payment fields, typed confirmation for buy / send / submit / delete) before sending one.
 let loopRunning = false;
 
 const get = async () => (await chrome.storage.local.get({ server: "", token: "", pair: null, granted: {} }));
@@ -130,14 +131,44 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const inTab = (tabId, func, args = []) => chrome.scripting.executeScript({ target: { tabId }, func, args }).then((x) => x[0].result);
 const REF = (ref) => `[data-wref="${Number(ref)}"]`;
 
+async function runDevice(op, a) {      // commands about the browser, not one tab
+  switch (op) {
+    case "tabs": {
+      const ts = await chrome.tabs.query({});
+      return { ok: true, tabs: ts.map((t) => ({ id: t.id, url: t.url || "", title: t.title || "", active: !!t.active, window: t.windowId, last: t.lastAccessed || 0 })) };
+    }
+    case "open": {
+      const t = await chrome.tabs.create({ url: a.url, active: true });
+      for (let i = 0; i < 40; i++) { const x = await chrome.tabs.get(t.id); if (x.status === "complete") break; await sleep(500); }
+      await sleep(800);
+      const x = await chrome.tabs.get(t.id);
+      return { ok: true, tab_id: t.id, url: x.url || a.url, title: x.title || "" };
+    }
+    default: return { ok: false, error: "unknown_op" };
+  }
+}
+
+async function activate(tabId) {      // bring the tab (and its window) to the front
+  const t = await chrome.tabs.get(tabId);
+  if (!t.active) await chrome.tabs.update(tabId, { active: true });
+  try { await chrome.windows.update(t.windowId, { focused: true }); } catch (e) {}
+  return t;
+}
+
 async function run(tabId, op, a) {
   switch (op) {
+    case "activate": { await activate(tabId); await sleep(300); return { ok: true }; }
     case "info": { const t = await chrome.tabs.get(tabId); return { ok: true, url: t.url, title: t.title }; }
     case "snapshot": {
       const x = await chrome.scripting.executeScript({ target: { tabId }, files: ["page.js"] });
       return { ok: true, page: x[0].result };
     }
-    case "goto": await chrome.tabs.update(tabId, { url: a.url }); await sleep(1500); return { ok: true };
+    case "goto": {
+      await chrome.tabs.update(tabId, { url: a.url });
+      for (let i = 0; i < 40; i++) { await sleep(500); const x = await chrome.tabs.get(tabId); if (x.status === "complete" && i >= 1) break; }
+      await sleep(500);
+      return { ok: true };
+    }
     case "back": await chrome.tabs.goBack(tabId); await sleep(800); return { ok: true };
     case "scroll": await inTab(tabId, (dy) => window.scrollBy(0, dy), [a.dy]); await sleep(300); return { ok: true };
     case "click": {
@@ -191,9 +222,9 @@ async function run(tabId, op, a) {
       }, [REF(a.ref), a.value]);
       return r ? { ok: false, error: r } : { ok: true };
     }
-    case "screenshot": {      // only ever the visible tab of the window: refuse if the handed-over tab is not the one on screen
-      const t = await chrome.tabs.get(tabId);
-      if (!t.active) return { ok: false, error: "tab_not_visible" };
+    case "screenshot": {      // only the visible tab can be captured: bring this one to the front first
+      const t = await activate(tabId);
+      if (!t.active) await sleep(400);
       if (a.vis != null) { await inTab(tabId, (sel) => { const e = document.querySelector(sel); if (e) e.scrollIntoView({ block: "center" }); }, [`[data-wvis="${Number(a.vis)}"]`]); await sleep(400); }
       const url = await chrome.tabs.captureVisibleTab(t.windowId, { format: "jpeg", quality: 55 });
       return { ok: true, b64: url.split(",")[1] };
@@ -210,7 +241,7 @@ async function loop() {
   try {
     for (;;) {
       const st = await get();
-      if (!st.token || !Object.keys(st.granted).length) break;
+      if (!st.token) break;
       let r;
       try { r = await api("/api/ext/poll?wait=20"); failures = 0; } catch (e) { if (++failures >= 5) break; await sleep(5000); continue; }      // gateway unreachable: give up, the 1-minute alarm tries again later
       if (r.status === 401 || r.status === 423) { await revokeAllLocal(st); break; }
@@ -218,9 +249,7 @@ async function loop() {
       const cmd = r.data.cmd;
       if (!cmd) continue;
       let res;
-      const now = await get();
-      if (!now.granted[cmd.tab_id]) res = { ok: false, error: "tab_not_handed_over" };
-      else { try { res = await run(cmd.tab_id, cmd.op, cmd.args || {}); } catch (e) { res = { ok: false, error: String(e.message || e).slice(0, 150) }; } }
+      try { res = cmd.tab_id === -1 ? await runDevice(cmd.op, cmd.args || {}) : await run(cmd.tab_id, cmd.op, cmd.args || {}); } catch (e) { res = { ok: false, error: String(e.message || e).slice(0, 150) }; }
       try { await api("/api/ext/result", { method: "POST", body: { id: cmd.id, result: res } }); } catch (e) {}
     }
   } finally { loopRunning = false; }
@@ -259,7 +288,7 @@ chrome.runtime.onMessage.addListener((m, _s, reply) => {
       if (!st.pair) return reply({ ok: false, error: "没有进行中的配对" });
       try {
         const r = await api(`/api/pair/status?pair_id=${st.pair.pair_id}&poll_secret=${st.pair.poll_secret}`, { server: st.pair.server });
-        if (r.data.status === "approved" && r.data.token) { await set({ token: r.data.token, pair: null }); checkVersion(); return reply({ ok: true, status: "approved" }); }
+        if (r.data.status === "approved" && r.data.token) { await set({ token: r.data.token, pair: null }); checkVersion(); loop(); return reply({ ok: true, status: "approved" }); }
         if (r.status !== 200 && r.status !== 404) return reply({ ok: false, error: `网关拒绝了请求 (状态 ${r.status})` });
         return reply({ ok: true, status: r.data.status || (r.status === 404 ? "expired" : "pending") });
       } catch (e) { return reply({ ok: false, error: `连不上网关: ${String(e.message || e).slice(0, 60)}` }); }

@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
   "name": "交给 AI",
-  "version": "0.4.0",
-  "description": "Chat with your own AI assistant gateway in a side panel and hand it ONE browser tab at a time. Site access is requested for that one site only when you hand a tab over, and removed when you take it back.",
+  "version": "0.5.0",
+  "description": "Chat with your own AI assistant gateway in a side panel. Once paired, the assistant can open, read and operate pages in this browser directly (buying, sending, submitting, deleting still ask you first on your phone or in the panel).",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
     "alarms",
-    "sidePanel"
+    "sidePanel",
+    "tabs"
   ],
   "background": {
     "service_worker": "background.js"
@@ -17,13 +18,6 @@
   "action": {
     "default_title": "交给 AI (点击打开侧边栏)"
   },
-  "optional_permissions": [
-    "tabs"
-  ],
-  "optional_host_permissions": [
-    "http://*/*",
-    "https://*/*"
-  ],
   "side_panel": {
     "default_path": "sidepanel.html"
   },
@@ -35,5 +29,9 @@
       },
       "description": "打开「交给 AI」侧边栏"
     }
-  }
+  },
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ]
 }
