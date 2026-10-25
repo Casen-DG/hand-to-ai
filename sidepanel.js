@@ -86,16 +86,20 @@ async function render() {
   const st = await send({ type: "state" });
   if (!st.paired) return pairingView(st);
   const list = el("div", { id: "list" }), reqBox = el("div", {}), note = el("div", { class: "note" });
-  const dot = el("span", { class: "dot" }), conn = el("span", {}, "连接中…"), tabInfo = el("span", { class: "mut" }), handBtn = el("button", {}, "");
-  const convTitle = el("strong", { class: "convtitle" }, "…"), banner = el("div", { class: "warn hidden" }), newBtn = el("button", {}, "新对话");
-  const mode = el("select", {}, el("option", { value: "act" }, "操作当前页面"), el("option", { value: "read" }, "问当前页面"), el("option", { value: "chat" }, "普通聊天"));
+  const dot = el("span", { class: "dot" }), conn = el("span", { class: "mut" }, "连接中…"), tabInfo = el("span", { class: "mut grow" }), handBtn = el("button", { class: "ghost" }, "");
+  const convTitle = el("strong", { class: "convtitle" }, "…"), banner = el("div", { class: "warn hidden" }), newBtn = el("button", { class: "ghost", title: "为这个标签页开始一段新对话" }, "＋ 新对话");
+  const mode = el("select", { title: "这条消息怎么处理" }, el("option", { value: "act" }, "操作当前页面"), el("option", { value: "read" }, "问当前页面"), el("option", { value: "chat" }, "普通聊天"));
   const stopBtn = el("button", { class: "danger hidden", onclick: async () => { await api("/api/web/stop", { method: "POST", body: {} }); say("已请求停止"); } }, "停止");
-  const ta = el("textarea", { rows: 2, placeholder: "输入指令 (默认操作当前页面; 任务提问时直接在这里回答); Enter 发送, Shift+Enter 换行" });
-  const sendBtn = el("button", { class: "primary" }, "发送");
+  const ta = el("textarea", { rows: 1, placeholder: "说点什么, 或让我操作当前页面…" });
+  const sendBtn = el("button", { class: "primary send", title: "发送 (Enter)", "aria-label": "发送" }, "↑");
   const say = (t) => { note.textContent = t; };
-  const hdr = el("div", { class: "hdr" }, el("div", { class: "row" }, convTitle, newBtn), banner, el("div", { class: "row" }, dot, conn, el("span", { class: "mut" }, " · "), tabInfo, handBtn,
-    el("button", { onclick: async () => { if (confirm("断开与网关的连接? (已交出的标签页会全部收回)")) { await send({ type: "disconnect" }); render(); } } }, "断开")));
-  root.replaceChildren(...[st.outdated ? el("div", { class: "warn" }, `有新版本 ${st.latest} (当前 ${st.current}), 请 git pull 后重新加载扩展`) : null, hdr, list, reqBox, el("div", { class: "bar" }, note, ta, el("div", { class: "row" }, mode, stopBtn, sendBtn))].filter(Boolean));   // replaceChildren turns a null into the text "null"
+  const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; };
+  ta.addEventListener("input", grow);
+  const hdr = el("header", { class: "top" }, el("div", { class: "top-main" }, dot, convTitle, newBtn), banner,
+    el("div", { class: "chip-row" }, tabInfo, handBtn, conn,
+      el("button", { class: "ghost", title: "断开与网关的连接 (已交出的标签页会全部收回)", onclick: async () => { if (confirm("断开与网关的连接? (已交出的标签页会全部收回)")) { await send({ type: "disconnect" }); render(); } } }, "断开")));
+  const composer = el("div", { class: "composer" }, note, el("div", { class: "box" }, ta, el("div", { class: "tools" }, mode, stopBtn, el("span", { class: "grow" }), sendBtn)));
+  root.replaceChildren(...[st.outdated ? el("div", { class: "warn" }, `有新版本 ${st.latest} (当前 ${st.current}), 请 git pull 后重新加载扩展`) : null, hdr, list, reqBox, composer].filter(Boolean));   // replaceChildren turns a null into the text "null"
   try { const m = (await chrome.storage.local.get({ panelMode: "act" })).panelMode; mode.value = m; } catch (e) { /* default */ }
   mode.addEventListener("change", () => chrome.storage.local.set({ panelMode: mode.value }));
   const alive = () => my === gen;
@@ -111,9 +115,10 @@ async function render() {
     return "restricted";
   }
   const goodText = (x) => (typeof x === "string" && x.trim() && !/^(null|undefined)$/i.test(x.trim()) ? x.trim() : "");
-  const hostOf = (u) => { try { return new URL(u).hostname; } catch (e) { return ""; } };
+  const hostOf = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.hostname : ""; } catch (e) { return ""; } };
   // title: the tab's own, else what was stored when it was handed over, else the host name, never "null"
-  const tabName = (t) => (goodText(t && t.title) || goodText((S.granted[t && t.id] || {}).title) || hostOf(t && t.url) || hostOf((S.granted[t && t.id] || {}).url) || "当前页面").slice(0, 30);
+  const tabName = (t) => (goodText(t && t.title) || goodText((S.granted[t && t.id] || {}).title) || hostOf(t && t.url) || hostOf((S.granted[t && t.id] || {}).url)
+    || (t && typeof t.url === "string" && t.url && !/^https?:/i.test(t.url) ? "浏览器内部页面" : "当前页面")).slice(0, 30);      // chrome:// and the like: the page's name or 「浏览器内部页面」, never "null"
   async function allowUrls() { try { return await chrome.permissions.request({ permissions: ["tabs"] }); } catch (e) { return false; } }
   async function refreshTab() {
     const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -124,7 +129,7 @@ async function render() {
     tabInfo.textContent = mine ? tabName(S.tab) + " · 已交给 AI"
       : st === "ok" ? tabName(S.tab) + " · 未交出"
       : st === "unknown" ? "还没读到当前页面的网址 (发送页面指令时会请求权限)"
-      : st === "restricted" ? "这是浏览器内部页面, 不能交给 AI, 只能普通聊天"
+      : st === "restricted" ? "浏览器内部页面 · 不能交给 AI, 只能普通聊天"
       : "没有打开的页面, 只能普通聊天";
     tabInfo.className = mine ? "on" : "mut";
     convTitle.textContent = S.tab ? tabName(S.tab) : "没有打开的页面";
@@ -183,14 +188,14 @@ async function render() {
         const g = await send({ type: "grant", tabId: tab.id });
         if (!g.ok) return say("不能交出这个标签页: " + g.error);
         S.granted[tab.id] = true; refreshTab();
-        list.append(el("div", { class: "note" }, "已把当前标签页交给 AI (页面里有红色横幅, 随时可以点「收回」)"));
+        list.append(el("div", { class: "note" }, "已把当前标签页交给 AI (工具栏图标上有「AI」标记, 随时可以点「收回」)"));
       }
     }
     sendBtn.disabled = true;
     try {
       if (!C.chan) await syncConv();
       const r = await api("/api/chat", { method: "POST", body: { text, mode: m, channel: C.chan, ...(m !== "chat" ? { tab: { tab_id: tab.id } } : {}) } });
-      if (r.ok) { ta.value = ""; say(""); } else if (r.status === 409 && r.data.error === "no_conversation") { await syncConv(); say("这个对话已结束, 已切换到当前标签页的对话, 请再发一次"); } else if (r.status !== 423) say("发送失败: " + (r.data.error || r.status));
+      if (r.ok) { ta.value = ""; grow(); say(""); } else if (r.status === 409 && r.data.error === "no_conversation") { await syncConv(); say("这个对话已结束, 已切换到当前标签页的对话, 请再发一次"); } else if (r.status !== 423) say("发送失败: " + (r.data.error || r.status));
     } catch (e) { say("连不上网关: 请检查 Tailscale 和网关地址"); }
     sendBtn.disabled = false;
     ta.focus();
@@ -247,38 +252,53 @@ async function render() {
     }
   })();
 
-  // pending confirmations (cards with screenshot and 确认 / 取消) and the running task
-  function card(r) {
-    const retype = el("input", { placeholder: `再输入一次「${r.confirm_text}」`, class: r.level === "dangerous" ? "" : "hidden" });
-    const decide = (decision) => async (ev) => {
-      if (!ev.isTrusted) return;
-      const x = await api(`/api/requests/${encodeURIComponent(r.id)}/resolve`, { method: "POST", body: { decision, retype: retype.value } });
-      if (!x.ok && x.status !== 423) say(x.data.reason === "retype_mismatch" ? "高风险操作需要再输入一次确认文字" : "没有处理成功: " + (x.data.reason || x.status));
-      else loadSide();
+  // pending confirmations: a dialog with the screenshot, what will be done and 确认 / 取消; a high-risk one asks for 「确认」 typed once more.
+  // Only a click the browser says a person made counts (isTrusted); nothing a page or model writes can become a button.
+  const dismissed = new Set();
+  let openId = null;
+  const closeModal = () => { const m = document.getElementById("modal"); if (m) m.remove(); openId = null; };
+  function requestModal(r) {
+    closeModal(); openId = r.id;
+    const options = Array.isArray(r.options) && r.options.length ? r.options : null;
+    const needsRetype = options ? options.some((o) => o.id === "push") : r.level === "dangerous";
+    const word = r.confirm_text || "确认";
+    const retype = el("input", { placeholder: `再输入一次「${word}」`, class: needsRetype ? "" : "hidden", autocomplete: "off" });
+    const opinion = el("input", { placeholder: "重做的意见 (可留空)", class: options && options.some((o) => o.note) ? "" : "hidden" });
+    const err = el("div", { class: "bad" });
+    const buttons = [];
+    const sync = () => buttons.forEach((b) => { b.disabled = !!(b.dataset.gated && needsRetype && retype.value.trim() !== word); });
+    const answer = async (body) => {
+      buttons.forEach((b) => { b.disabled = true; });
+      const x = await api(`/api/requests/${encodeURIComponent(r.id)}/resolve`, { method: "POST", body });
+      if (!x.ok && x.status !== 423) { err.textContent = x.data.reason === "retype_mismatch" ? `高风险操作需要再输入一次「${word}」` : "没有处理成功: " + (x.data.reason || x.status); sync(); return; }
+      dismissed.add(r.id); closeModal(); loadSide();
     };
-    // a multiple-choice card (devflow step report): one button per option the server listed; an option marked `note` also sends the typed opinion
-    const note = el("input", { placeholder: "重做的意见 (可留空)", class: Array.isArray(r.options) && r.options.some((o) => o.note) ? "" : "hidden" });
-    const choose = (id) => async (ev) => {
-      if (!ev.isTrusted) return;
-      const x = await api(`/api/requests/${encodeURIComponent(r.id)}/resolve`, { method: "POST", body: { decision: "choose", choice: id, note: note.value } });
-      if (!x.ok && x.status !== 423) say("没有处理成功: " + (x.data.reason || x.status));
-      else loadSide();
-    };
-    const buttons = Array.isArray(r.options) && r.options.length
-      ? [note, el("div", { class: "row" }, r.options.map((o, i) => el("button", { class: i === 0 ? "primary" : "", onclick: choose(o.id) }, o.label)))]
-      : [retype, el("div", { class: "row" }, el("button", { class: "primary", onclick: decide("approve") }, "确认"), el("button", { onclick: decide("deny") }, "取消"))];
-    const c = el("div", { class: "req" }, el("strong", {}, r.title), el("pre", {}, r.detail), ...buttons);
-    if (SHOT_RE.test(r.screenshot || "")) shotImg(r.screenshot).then((i) => c.insertBefore(i, c.children[2]));
-    return c;
+    const btn = (label, cls, gated, fn) => { const b = el("button", { class: cls, onclick: (ev) => { if (ev.isTrusted) fn(); } }, label); b.dataset.gated = gated ? "1" : ""; buttons.push(b); return b; };
+    retype.addEventListener("input", sync);
+    const row = options ? options.map((o, i) => btn(o.label, i === 0 ? "primary" : "", o.id === "push", () => answer({ decision: "choose", choice: o.id, note: opinion.value })))
+      : [btn("取消", "", false, () => answer({ decision: "deny" })), btn("确认", "primary", true, () => answer({ decision: "approve", retype: retype.value }))];
+    const later = el("button", { class: "ghost", onclick: () => { dismissed.add(r.id); closeModal(); loadSide(); } }, "稍后");
+    const shotBox = el("div", {});
+    const bg = el("div", { class: "modal-bg", id: "modal", onclick: (ev) => { if (ev.target === bg) later.click(); } },
+      el("div", { class: "modal", role: "dialog", "aria-modal": "true" }, el("h3", {}, r.title), shotBox, el("div", { class: "what" }, r.detail || ""),
+        needsRetype ? el("div", { class: "danger-note" }, options ? "推送会把改动发到 GitHub。" : "这是高风险操作 (花钱、对外发送、提交、删除或推送)。") : null,
+        retype, opinion, err, el("div", { class: "row" }, later, row)));
+    document.body.append(bg);
+    if (SHOT_RE.test(r.screenshot || "")) shotImg(r.screenshot).then((i) => shotBox.append(i));
+    sync(); retype.classList.contains("hidden") || retype.focus();
   }
+  const pendingBar = (rs) => el("div", { class: "pending" }, el("span", {}, `有 ${rs.length} 个操作等你确认`), el("button", { class: "primary", onclick: () => { dismissed.delete(rs[0].id); requestModal(rs[0]); } }, "查看并确认"));
   async function loadSide() {
     try {
       if (!C.chan) return;
       const chan = C.chan, q = "?channel=" + encodeURIComponent(chan);
       const [rq, stt] = await Promise.all([api("/api/requests" + q), api("/api/chat/state" + q)]);
       if (!alive() || !rq.ok || chan !== C.chan) return;
-      const ids = rq.data.requests.map((r) => r.id).join();
-      if (reqBox.dataset.ids !== ids) { reqBox.dataset.ids = ids; reqBox.replaceChildren(...rq.data.requests.map(card)); }
+      const rs = rq.data.requests, ids = rs.map((r) => r.id).join();
+      if (reqBox.dataset.ids !== ids) { reqBox.dataset.ids = ids; reqBox.replaceChildren(...(rs.length ? [pendingBar(rs)] : [])); }
+      if (openId && !rs.some((r) => r.id === openId)) closeModal();          // answered elsewhere (phone, control center)
+      const fresh = rs.find((r) => !dismissed.has(r.id));
+      if (fresh && !openId) requestModal(fresh);
       S.active = stt.data.active || null;
       stopBtn.classList.toggle("hidden", !S.active);
     } catch (e) { /* the chat loop reports connection problems */ }

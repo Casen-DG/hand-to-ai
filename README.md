@@ -4,7 +4,9 @@ A small Chrome / Edge extension (Manifest V3, no dependencies, no build step) th
 
 - **Broad access, by design (0.5.0).** The manifest asks for `tabs` and access to all http(s) sites, because the assistant must be able to list your open tabs, reuse the one a site is already open in, open a new one and read it. Only install it if you run the gateway yourself and trust it with your browser; pair only browsers you want it to drive. Unpair any time (**断开与网关的连接**, or `ai gateway revoke <id>` / `/lock` on the gateway).
 - It never types into password or card fields (a login uses the browser's own saved password, filled in by the browser), and screenshots bring the tab to the front first.
-- The side panel's per-tab 「交给 AI」 hand-over still works (red **AI** badge and banner) for the chat's 「问当前页面」.
+- The side panel's per-tab 「交给 AI」 hand-over still works (a small **AI** badge on the toolbar icon marks the tab; nothing is ever inserted into the page) for the chat's 「问当前页面」.
+- Anything that needs your confirmation opens as a dialog in the side panel (screenshot, what will be done, 确认 / 取消; a high-risk action asks you to type 「确认」 once more).
+- Sliders, drop-downs, check boxes and switches are supported (React-controlled components too), and a task that repeats the same action or flips a control back and forth three times stops and says why.
 - No gateway address is built in; you enter yours the first time. It must be `https://` (or `http://localhost` for local testing).
 
 ## Install (Chrome or Edge, macOS or Windows)

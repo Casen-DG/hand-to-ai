@@ -1,4 +1,5 @@
-// Runs inside the page. Returns {title,url,elements,blocks,flags}. Never returns input values (so passwords and card numbers cannot reach a model).
+// Runs inside the page. Returns {title,url,elements,blocks,flags}. Never returns the value of a text field (so passwords and card numbers cannot reach a model); only the
+// state of sliders (value / range), drop-downs (chosen option / options) and check boxes (checked) is read, because the assistant has to set those.
 (() => {
   const PAY_NAME = /card.?(num|no)|cc.?(num|no)|cvv|cvc|csc|expir|security.?code|卡号|银行卡|信用卡|有效期|安全码|iban|routing/i;
   const PAY_HOST = /(stripe|paypal|adyen|braintree|checkout\.com|alipay|pay\.google|applepay|klarna|squareup|razorpay|worldpay)/i;
@@ -23,12 +24,12 @@
     if (t === "button") return "button";
     if (t === "select") return "combobox";
     if (t === "textarea") return "textbox";
-    if (t === "input") { const ty = (e.type || "text").toLowerCase(); return ty === "checkbox" ? "checkbox" : ty === "radio" ? "radio" : ["submit", "button", "reset", "image"].includes(ty) ? "button" : "textbox"; }
+    if (t === "input") { const ty = (e.type || "text").toLowerCase(); return ty === "range" ? "slider" : ty === "checkbox" ? "checkbox" : ty === "radio" ? "radio" : ["submit", "button", "reset", "image"].includes(ty) ? "button" : "textbox"; }
     return "generic";
   };
   document.querySelectorAll("[data-wref]").forEach((e) => e.removeAttribute("data-wref"));
   const els = [], flags = { login: false, payment: false };
-  const sel = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=menuitem],[role=tab],[onclick]';
+  const sel = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=switch],[role=radio],[role=slider],[role=menuitem],[role=tab],[onclick]';
   let i = 0;
   for (const e of document.querySelectorAll(sel)) {
     if (!vis(e) || els.length >= 150) continue;
@@ -41,8 +42,15 @@
     else if (/^cc-/.test(ac) || (["input", "select", "textarea"].includes(t) && PAY_NAME.test(label))) { kind = "payment"; flags.payment = true; }
     const ref = i++;
     e.setAttribute("data-wref", String(ref));
-    els.push({ ref, tag: t, role: roleOf(e), name: nameOf(e), type: ty, kind, disabled: !!e.disabled, inForm: !!e.closest("form"),
-               href: t === "a" ? e.href : "", checked: ["checkbox", "radio"].includes(ty) ? !!e.checked : undefined, bare: t === "button" && !e.getAttribute("type") });
+    const item = { ref, tag: t, role: roleOf(e), name: nameOf(e), type: ty, kind, disabled: !!e.disabled, inForm: !!e.closest("form"),
+               href: t === "a" ? e.href : "", checked: ["checkbox", "radio"].includes(ty) ? !!e.checked : undefined, bare: t === "button" && !e.getAttribute("type") };
+    if (kind === "normal") {
+      if (t === "input" && ty === "range") Object.assign(item, { value: e.value, min: e.min === "" ? "0" : e.min, max: e.max === "" ? "100" : e.max, step: e.step === "" ? "1" : e.step });
+      else if (t === "select") Object.assign(item, { value: (e.selectedOptions[0] || {}).text || "", options: [...e.options].slice(0, 40).map((o) => clean(o.text).slice(0, 60)) });
+      else if (["switch", "checkbox", "radio"].includes(item.role) && item.checked === undefined) item.checked = e.getAttribute("aria-checked") === "true";
+      else if (item.role === "slider" && t !== "input") Object.assign(item, { value: e.getAttribute("aria-valuenow") || "", min: e.getAttribute("aria-valuemin") || "", max: e.getAttribute("aria-valuemax") || "" });
+    }
+    els.push(item);
   }
   for (const f of document.querySelectorAll("iframe")) if (PAY_HOST.test(f.src || "")) flags.payment = true;
   const blocks = [], unread = [];
@@ -58,7 +66,31 @@
   };
   const put = (text) => { text = clean(text).slice(0, 600); if (text && !(blocks.length && blocks[blocks.length - 1].text === text)) blocks.push({ section, text }); };
   const FORMULA = "mjx-container,.katex,.MathJax,.MathJax_Display,.mathjax,math,.mwe-math-element,[data-mathml]";
+  // MathML to readable text. A table becomes a matrix [[a, b], [c, d]] (a one-column table is a vector), fractions (a)/(b), powers a^b, roots sqrt(...).
+  const wrapIf = (s) => (/^[\w.]+$/.test(s) ? s : "(" + s + ")");
+  const mml = (n) => {
+    if (n.nodeType === 3) return n.textContent.replace(/\s+/g, " ").trim();
+    if (!(n instanceof Element)) return "";
+    const t = n.localName.replace(/^.*:/, ""), k = [...n.children], all = () => k.map(mml).filter(Boolean).join(" ");
+    switch (t) {
+      case "mtable": return "[" + k.map((r) => "[" + (r.localName === "mtr" || r.localName === "mlabeledtr" ? [...r.children] : [r]).map(mml).join(", ") + "]").join(", ") + "]";
+      case "mfrac": return "(" + mml(k[0]) + ")/(" + mml(k[1]) + ")";
+      case "msup": return wrapIf(mml(k[0])) + "^" + wrapIf(mml(k[1]));
+      case "msub": return wrapIf(mml(k[0])) + "_" + wrapIf(mml(k[1]));
+      case "msubsup": return wrapIf(mml(k[0])) + "_" + wrapIf(mml(k[1])) + "^" + wrapIf(mml(k[2]));
+      case "msqrt": return "sqrt(" + all() + ")";
+      case "mroot": return "root(" + mml(k[1]) + ")(" + mml(k[0]) + ")";
+      case "mover": return mml(k[0]) + " with " + mml(k[1]) + " above";
+      case "munder": return mml(k[0]) + " with " + mml(k[1]) + " below";
+      case "mfenced": return (n.getAttribute("open") ?? "(") + k.map(mml).join(", ") + (n.getAttribute("close") ?? ")");
+      case "annotation": case "annotation-xml": case "semantics": return t === "semantics" ? mml(k[0]) : "";
+      case "mspace": return "";
+      default: return k.length ? all() : n.textContent.replace(/\s+/g, " ").trim();
+    }
+  };
   const formulaSource = (e) => {
+    const mt = e.matches("math") ? e : e.querySelector("math");
+    if (mt && mt.querySelector("mtable")) return clean(mml(mt));          // a matrix / vector: the structure matters more than a flat alt text
     const ann = e.querySelector('annotation[encoding="application/x-tex"]') || e.querySelector("annotation");
     if (ann && clean(ann.textContent)) return clean(ann.textContent);
     const m = e.matches("math") ? e : e.querySelector("math");
@@ -67,6 +99,7 @@
     const img = e.querySelector("img[alt]") || (e.tagName === "IMG" ? e : null);
     if (img && clean(img.alt)) return clean(img.alt);
     const as = e.querySelector("mjx-assistive-mml,.MJX_Assistive_MathML,.katex-mathml");
+    if (mt && clean(mml(mt))) return clean(mml(mt));          // plain MathML without any TeX / alt text: read its structure
     return as ? clean(as.textContent) : "";
   };
   // Visual state that plain text loses: right / wrong marks, red / green, tick and cross icons, highlights. Read from class names, aria attributes,
@@ -99,9 +132,12 @@
     if (col) tags.push(col);
     return tags.length ? " [标记: " + [...new Set(tags)].slice(0, 4).join(", ") + "]" : "";
   };
+  const GLYPH_OK = /^[✓✔☑✅]+$/, GLYPH_BAD = /^[✗✘×✕✖☒❌]+$/;
   const iconLabel = (e) => {
-    if (!(e.tagName === "I" || e.tagName === "SPAN" || e.tagName === "EM" || e.tagName === "DIV")) return "";
-    if (clean(e.textContent) || e.children.length > 1) return "";
+    if (!["I", "SPAN", "EM", "DIV", "B", "STRONG", "TD"].includes(e.tagName)) return "";
+    const tx = clean(e.textContent);
+    if (tx.length <= 3 && (GLYPH_OK.test(tx) || GLYPH_BAD.test(tx)) && !e.children.length) return "[图标: " + (GLYPH_BAD.test(tx) ? "叉 (错)" : "勾 (对)") + " 符号" + tx + stateOf(e) + "]";
+    if (tx || e.children.length > 1) return "";
     const cls = typeof e.className === "string" ? e.className : "";
     const al = e.getAttribute("aria-label") || e.getAttribute("title") || (e.querySelector("title") || {}).textContent || e.getAttribute("alt") || "";
     if (clean(al)) return "[图标: " + clean(al) + stateOf(e) + "]";
@@ -109,9 +145,11 @@
     return "";
   };
   const big = (e) => { const r = e.getBoundingClientRect(); return r.width >= 40 && r.height >= 40; };
+  let rowEl = null;
   const SKIP = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "INPUT", "TEXTAREA", "SELECT", "OPTION"]);
   const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT, { acceptNode(n) {
     const tag = n.tagName.toLowerCase();
+    if (rowEl && rowEl.contains(n)) return NodeFilter.FILTER_REJECT;          // already part of an option row's single block
     if (tag === "script" && /^math\/tex/.test(n.type || "")) { put("[公式] " + n.textContent); return NodeFilter.FILTER_REJECT; }
     if (SKIP.has(n.tagName)) return NodeFilter.FILTER_REJECT;
     if (!vis(n)) return NodeFilter.FILTER_REJECT;
@@ -156,7 +194,7 @@
   };
   const SKIP_ROW = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "INPUT", "TEXTAREA", "SELECT", "OPTION", "SVG", "svg", "CANVAS"]);
   const rows = new Map();
-  for (const ic of document.body ? document.body.querySelectorAll("i,span,em,div,svg") : []) {
+  for (const ic of document.body ? document.body.querySelectorAll("i,span,em,div,b,strong,td,svg") : []) {
     if (!vis(ic) || !iconLabel(ic)) continue;
     let r = ic.parentElement;
     while (r && r !== document.body && !rowText(r)) r = r.parentElement;
@@ -172,7 +210,6 @@
     if (!r || r === document.body || rowText(r).length > 300) continue;
     if (!rows.has(r)) rows.set(r, []);
   }
-  let rowEl = null;
   for (let n = walker.currentNode; n; n = walker.nextNode()) {
     if (!(n instanceof Element)) continue;
     if (rowEl && rowEl.contains(n)) continue;
@@ -180,12 +217,18 @@
       rowEl = n;
       const icons = rows.get(n).map((ic) => iconLabel(ic)).join(" ");
       const chosen = [...n.querySelectorAll("input[type=radio],input[type=checkbox]")].some((x) => x.checked) ? " [已选中]" : "";
-      blocks.push({ section, text: ("[选项行] " + rowText(n)).slice(0, 560) + " " + icons + chosen + stateOf(n) });
+      const inner = new Set();      // the colour of the option's own text, wherever inside THIS row it sits
+      for (const x of [...n.querySelectorAll("*")].slice(0, 40)) {
+        if (![...x.childNodes].some((c) => c.nodeType === 3 && clean(c.textContent))) continue;
+        const c = colorOf(getComputedStyle(x).color); if (c) inner.add("文字" + c);
+      }
+      const st = stateOf(n), extra = [...inner].filter((c) => !st.includes(c));
+      blocks.push({ section, text: ("[选项行] " + rowText(n)).slice(0, 560) + " " + icons + chosen + st + (extra.length ? " [行内标记: " + extra.join(", ") + "]" : "") });
       continue;
     }
     if (/^H[1-6]$/.test(n.tagName)) { section = clean(n.innerText).slice(0, 80) || section; blocks.push({ section, text: "## " + section }); continue; }
     const ic = iconLabel(n);
-    if (ic) { blocks.push({ section, text: ic }); continue; }
+    if (ic) { blocks.push({ section, text: ic + " (没能确定它属于哪个选项, 不要把它挂到任何选项上)" }); continue; }
     if (["P", "LI", "TD", "TH", "PRE", "BLOCKQUOTE", "FIGCAPTION", "DT", "DD", "SUMMARY", "LABEL", "SPAN", "DIV", "A", "BUTTON"].includes(n.tagName)) {
       const own = clean([...n.childNodes].filter((c) => c.nodeType === 3).map((c) => c.textContent).join(" "));
       const st = own && blocks.length < 500 ? stateOf(n) : "";

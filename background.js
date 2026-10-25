@@ -31,24 +31,20 @@ async function checkVersion() {
   } catch (e) {}
 }
 
-// ---- marking: badge on the toolbar icon (page independent) + a banner in the page ----
+// ---- marking: only a small badge on the toolbar icon (per tab) says this tab is being operated by the AI. Nothing is ever inserted into the page. ----
 async function mark(tabId, on) {
   try {
     await chrome.action.setBadgeText({ tabId, text: on ? "AI" : "" });
-    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#c0392b" });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#c96442" });
   } catch (e) {}
-  try {
-    await chrome.scripting.executeScript({ target: { tabId }, args: [on], func: (show) => {
-      const id = "__hand_to_ai_banner";
-      document.getElementById(id)?.remove();
-      if (!show) return;
-      const b = document.createElement("div");
-      b.id = id;
-      b.style.cssText = "position:fixed;z-index:2147483647;top:0;left:0;right:0;background:#c0392b;color:#fff;font:13px system-ui;padding:4px 10px;text-align:center;pointer-events:none";
-      b.textContent = "🤖 这个标签页已交给 AI 操作 — 点浏览器工具栏里的扩展图标可以收回";
-      document.documentElement.appendChild(b);
-    } });
-  } catch (e) {}
+}
+
+// Older versions (<= 0.5.x) put a red banner into the page; remove a leftover one once, when this version is installed or the browser starts.
+async function removeOldBanners() {
+  const st = await get();
+  for (const id of Object.keys(st.granted || {})) {
+    try { await chrome.scripting.executeScript({ target: { tabId: Number(id) }, func: () => document.getElementById("__hand_to_ai_banner")?.remove() }); } catch (e) {}
+  }
 }
 
 // Site access is optional: the popup asks for the current site's origin only when you click 「交给 AI」 (needs a user gesture), and it is removed again
@@ -121,7 +117,7 @@ async function syncState() {
   for (const id of Object.keys(st.granted)) if (!live.has(id)) { const g = st.granted[id]; delete st.granted[id]; await mark(Number(id), false); await dropOrigin(g.origin, st.granted); }
   await set({ granted: st.granted });
 }
-chrome.tabs.onUpdated.addListener(async (id, info) => {      // keep the banner after navigation
+chrome.tabs.onUpdated.addListener(async (id, info) => {      // keep the toolbar badge after navigation
   if (info.status !== "complete") return;
   const st = await get();
   if (st.granted[id]) mark(id, true);
@@ -213,15 +209,44 @@ async function run(tabId, op, a) {
       await sleep(400);
       return r ? { ok: false, error: r } : { ok: true };
     }
-    case "select": {
-      const r = await inTab(tabId, (sel, value) => {
+    case "select":
+    case "set": {      // range sliders, drop-downs, check boxes / radios / switches: native setter + input / change events (React controlled components), or a real click
+      const r = await inTab(tabId, (sel, want) => {
         const e = document.querySelector(sel);
-        if (!e || e.tagName !== "SELECT") return "not_a_select";
-        const o = [...e.options].find((x) => x.text.trim() === value);
-        if (!o) return "option_not_found";
-        e.value = o.value; e.dispatchEvent(new Event("input", { bubbles: true })); e.dispatchEvent(new Event("change", { bubbles: true })); return "";
+        if (!e) return { error: "unknown_ref" };
+        const ty = (e.type || "").toLowerCase(), role = e.getAttribute("role") || "";
+        if (ty === "password" || /^cc-/.test((e.getAttribute("autocomplete") || "").toLowerCase())) return { error: "blocked_field" };
+        const fire = () => { e.dispatchEvent(new Event("input", { bubbles: true })); e.dispatchEvent(new Event("change", { bubbles: true })); };
+        if (e.tagName === "INPUT" && ty === "range") {      // React-controlled sliders ignore `e.value = x`: use the native setter, then input + change
+          let v = Number(want);
+          if (!isFinite(v)) return { error: "not_a_number" };
+          const min = e.min === "" ? 0 : Number(e.min), max = e.max === "" ? 100 : Number(e.max), step = e.step === "" || e.step === "any" ? 1 : Number(e.step);
+          v = Math.min(max, Math.max(min, min + Math.round((v - min) / step) * step));
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(e, String(v));
+          fire();
+          return { value: e.value };
+        }
+        if (e.tagName === "INPUT" && (ty === "checkbox" || ty === "radio")) {
+          const on = want === true || /^(true|1|yes|on|checked|勾选|选中|是)$/i.test(String(want));
+          if (e.checked !== on) e.click();      // a real click: React and friends listen to click for check boxes, and it fires input + change itself
+          return { checked: e.checked };
+        }
+        if (e.tagName === "SELECT") {
+          const o = [...e.options].find((x) => x.text.trim() === String(want).trim()) || [...e.options].find((x) => x.value === String(want));
+          if (!o) return { error: "option_not_found", options: [...e.options].slice(0, 40).map((x) => x.text.trim()) };
+          Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(e, o.value);
+          fire();
+          return { value: e.selectedOptions[0].text };
+        }
+        if (["switch", "checkbox", "radio"].includes(role)) {
+          const on = want === true || /^(true|1|yes|on|checked|勾选|选中|是)$/i.test(String(want));
+          if ((e.getAttribute("aria-checked") === "true") !== on) e.click();
+          return { checked: e.getAttribute("aria-checked") === "true" };
+        }
+        return { error: "not_settable" };
       }, [REF(a.ref), a.value]);
-      return r ? { ok: false, error: r } : { ok: true };
+      await sleep(400);
+      return r && r.error ? { ok: false, error: r.error, ...(r.options ? { options: r.options } : {}) } : { ok: true, ...(r || {}) };
     }
     case "screenshot": {      // only the visible tab can be captured: bring this one to the front first
       const t = await activate(tabId);
@@ -270,7 +295,7 @@ chrome.alarms.onAlarm.addListener(async () => {
 });
 chrome.runtime.onStartup.addListener(() => { kick(); syncState().catch(() => {}); checkVersion(); });
 kick();
-chrome.runtime.onInstalled.addListener(() => { checkVersion(); });
+chrome.runtime.onInstalled.addListener(() => { checkVersion(); removeOldBanners(); });
 
 // ---- messages from the popup ----
 chrome.runtime.onMessage.addListener((m, _s, reply) => {
