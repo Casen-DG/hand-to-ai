@@ -226,6 +226,10 @@
       blocks.push({ section, text: ("[选项行] " + rowText(n)).slice(0, 560) + " " + icons + chosen + st + (extra.length ? " [行内标记: " + extra.join(", ") + "]" : "") });
       continue;
     }
+    if (n.tagName === "TR" && vis(n) && !n.querySelector("math, svg, canvas, img, input, select, textarea, button, a")) {         // a plain-text table row is one line, cells apart: a truth table's single-letter cells (T / F) are not text blocks of their own; rows with formulas, pictures or controls keep their own handling
+      const cells = [...n.children].filter((c) => c.tagName === "TD" || c.tagName === "TH").map((c) => clean(c.innerText));
+      if (cells.some(Boolean)) { rowEl = n; blocks.push({ section, text: ("[表格行] " + cells.join(" | ")).slice(0, 560) }); continue; }
+    }
     if (/^H[1-6]$/.test(n.tagName)) { section = clean(n.innerText).slice(0, 80) || section; blocks.push({ section, text: "## " + section }); continue; }
     const ic = iconLabel(n);
     if (ic) { blocks.push({ section, text: ic + " (没能确定它属于哪个选项, 不要把它挂到任何选项上)" }); continue; }
