@@ -91,14 +91,29 @@ async function render() {
   const mode = el("select", { title: "这条消息怎么处理" }, el("option", { value: "act" }, "操作当前页面"), el("option", { value: "read" }, "问当前页面"), el("option", { value: "chat" }, "普通聊天"));
   const stopBtn = el("button", { class: "danger hidden", onclick: async () => { await api("/api/web/stop", { method: "POST", body: {} }); say("已请求停止"); } }, "停止");
   const ta = el("textarea", { rows: 1, placeholder: "说点什么, 或让我操作当前页面…" });
+  let pics = [];          // pictures waiting to be sent with the next message: [{name, b64}]
+  const picInput = el("input", { type: "file", accept: "image/*,.heic,.heif", multiple: true, class: "hidden" });
+  const picBtn = el("button", { class: "ghost", title: "发图片给助手看 (也可以直接粘贴)", "aria-label": "图片", onclick: () => picInput.click() }, "📎");
   const sendBtn = el("button", { class: "primary send", title: "发送 (Enter)", "aria-label": "发送" }, "↑");
   const say = (t) => { note.textContent = t; };
+  const showPics = () => say(pics.length ? "📎 " + pics.map((p) => p.name).join("、") + " (发送时一起交给助手看)" : "");
+  const addPics = async (files) => {
+    for (const f of files) {
+      if (pics.length >= 4) { say("一次最多 4 张图"); break; }
+      if (f.size > 12 * 1024 * 1024) { say(`${f.name} 太大了 (最多 12 MB)`); continue; }
+      const b64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1] || ""); r.onerror = () => no(r.error); r.readAsDataURL(f); }).catch(() => "");
+      if (b64) pics.push({ name: f.name || "图片", b64 }); else say(`${f.name} 读不出来`);
+    }
+    if (pics.length) showPics();
+  };
+  picInput.addEventListener("change", async () => { await addPics([...picInput.files]); picInput.value = ""; });
+  ta.addEventListener("paste", (e) => { const fs = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/")); if (fs.length) { e.preventDefault(); addPics(fs); } });
   const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; };
   ta.addEventListener("input", grow);
   const hdr = el("header", { class: "top" }, el("div", { class: "top-main" }, dot, convTitle, newBtn), banner,
     el("div", { class: "chip-row" }, tabInfo, handBtn, conn,
       el("button", { class: "ghost", title: "断开与网关的连接 (已交出的标签页会全部收回)", onclick: async () => { if (confirm("断开与网关的连接? (已交出的标签页会全部收回)")) { await send({ type: "disconnect" }); render(); } } }, "断开")));
-  const composer = el("div", { class: "composer" }, note, el("div", { class: "box" }, ta, el("div", { class: "tools" }, mode, stopBtn, el("span", { class: "grow" }), sendBtn)));
+  const composer = el("div", { class: "composer" }, note, el("div", { class: "box" }, ta, el("div", { class: "tools" }, mode, picBtn, picInput, stopBtn, el("span", { class: "grow" }), sendBtn)));
   root.replaceChildren(...[st.outdated ? el("div", { class: "warn" }, `有新版本 ${st.latest} (当前 ${st.current}), 请 git pull 后重新加载扩展`) : null, hdr, list, reqBox, composer].filter(Boolean));   // replaceChildren turns a null into the text "null"
   try { const m = (await chrome.storage.local.get({ panelMode: "act" })).panelMode; mode.value = m; } catch (e) { /* default */ }
   mode.addEventListener("change", () => chrome.storage.local.set({ panelMode: mode.value }));
@@ -165,8 +180,8 @@ async function render() {
   // sending: the first message that needs the page hands the current tab over (the browser asks for access to that one site)
   async function sendMessage() {
     const text = ta.value.trim();
-    if (!text || sendBtn.disabled) return;
-    const mode0 = text.startsWith("/") || S.active ? "chat" : mode.value;          // a running task: this is an answer or a stop, not a new page command
+    if ((!text && !pics.length) || sendBtn.disabled) return;
+    const mode0 = text.startsWith("/") || S.active || pics.length ? "chat" : mode.value;       // a picture is looked at as a picture, not as a page command          // a running task: this is an answer or a stop, not a new page command
     const tab = S.tab;
     let m = mode0;
     if (m !== "chat" && !(tab && S.granted[tab.id])) {
@@ -194,8 +209,8 @@ async function render() {
     sendBtn.disabled = true;
     try {
       if (!C.chan) await syncConv();
-      const r = await api("/api/chat", { method: "POST", body: { text, mode: m, channel: C.chan, ...(m !== "chat" ? { tab: { tab_id: tab.id } } : {}) } });
-      if (r.ok) { ta.value = ""; grow(); say(""); } else if (r.status === 409 && r.data.error === "no_conversation") { await syncConv(); say("这个对话已结束, 已切换到当前标签页的对话, 请再发一次"); } else if (r.status !== 423) say("发送失败: " + (r.data.error || r.status));
+      const r = await api("/api/chat", { method: "POST", body: { text, mode: m, channel: C.chan, ...(pics.length ? { images: pics } : {}), ...(m !== "chat" ? { tab: { tab_id: tab.id } } : {}) } });
+      if (r.ok) { ta.value = ""; pics = []; grow(); say(""); } else if (r.status === 409 && r.data.error === "no_conversation") { await syncConv(); say("这个对话已结束, 已切换到当前标签页的对话, 请再发一次"); } else if (r.status !== 423) say("发送失败: " + (r.data.error || r.status));
     } catch (e) { say("连不上网关: 请检查 Tailscale 和网关地址"); }
     sendBtn.disabled = false;
     ta.focus();
