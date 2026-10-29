@@ -64,7 +64,7 @@
     e.setAttribute("data-wvis", String(id));
     unread.push({ id, kind, hint: clean(hint).slice(0, 80), w: Math.round(r.width), h: Math.round(r.height) });
   };
-  const put = (text) => { text = clean(text).slice(0, 600); if (text && !(blocks.length && blocks[blocks.length - 1].text === text)) blocks.push({ section, text }); };
+  const put = (text) => { text = clean(text).slice(0, 1500); if (text && !(blocks.length && blocks[blocks.length - 1].text === text)) blocks.push({ section, text }); };
   const FORMULA = "mjx-container,.katex,.MathJax,.MathJax_Display,.mathjax,math,.mwe-math-element,[data-mathml]";
   // MathML to readable text. A table becomes a matrix [[a, b], [c, d]] (a one-column table is a vector), fractions (a)/(b), powers a^b, roots sqrt(...).
   const wrapIf = (s) => (/^[\w.]+$/.test(s) ? s : "(" + s + ")");
@@ -223,21 +223,28 @@
         const c = colorOf(getComputedStyle(x).color); if (c) inner.add("文字" + c);
       }
       const st = stateOf(n), extra = [...inner].filter((c) => !st.includes(c));
-      blocks.push({ section, text: ("[选项行] " + rowText(n)).slice(0, 560) + " " + icons + chosen + st + (extra.length ? " [行内标记: " + extra.join(", ") + "]" : "") });
+      blocks.push({ section, text: ("[选项行] " + rowText(n)).slice(0, 1500) + " " + icons + chosen + st + (extra.length ? " [行内标记: " + extra.join(", ") + "]" : "") });
       continue;
     }
     if (n.tagName === "TR" && vis(n) && !n.querySelector("math, svg, canvas, img, input, select, textarea, button, a")) {         // a plain-text table row is one line, cells apart: a truth table's single-letter cells (T / F) are not text blocks of their own; rows with formulas, pictures or controls keep their own handling
       const cells = [...n.children].filter((c) => c.tagName === "TD" || c.tagName === "TH").map((c) => clean(c.innerText));
-      if (cells.some(Boolean)) { rowEl = n; blocks.push({ section, text: ("[表格行] " + cells.join(" | ")).slice(0, 560) }); continue; }
+      if (cells.some(Boolean)) { rowEl = n; blocks.push({ section, text: ("[表格行] " + cells.join(" | ")).slice(0, 1500) }); continue; }
     }
     if (/^H[1-6]$/.test(n.tagName)) { section = clean(n.innerText).slice(0, 80) || section; blocks.push({ section, text: "## " + section }); continue; }
     const ic = iconLabel(n);
     if (ic) { blocks.push({ section, text: ic + " (没能确定它属于哪个选项, 不要把它挂到任何选项上)" }); continue; }
     if (["P", "LI", "TD", "TH", "PRE", "BLOCKQUOTE", "FIGCAPTION", "DT", "DD", "SUMMARY", "LABEL", "SPAN", "DIV", "A", "BUTTON"].includes(n.tagName)) {
       const own = clean([...n.childNodes].filter((c) => c.nodeType === 3).map((c) => c.textContent).join(" "));
-      const st = own && blocks.length < 500 ? stateOf(n) : "";
-      if (own.length > 1 || (own && st)) blocks.push({ section, text: own.slice(0, 560) + st });
+      const st = own && blocks.length < 2000 ? stateOf(n) : "";
+      if (own.length > 1 || (own && st)) blocks.push({ section, text: own.slice(0, 1500) + st });
     }
   }
-  return { title: document.title, url: location.href, elements: els, blocks: blocks.slice(0, 600), flags, unread };
+  const links = [];          // every visible link with its text (read-only questions follow the relevant ones: 「full syllabus」「here」「details」)
+  for (const a of document.querySelectorAll("a[href]")) {
+    if (links.length >= 200) break;
+    if (!/^https?:/i.test(a.href) || !vis(a)) continue;
+    const name = nameOf(a);
+    if (name) links.push({ name, href: a.href });
+  }
+  return { title: document.title, url: location.href, elements: els, blocks: blocks.slice(0, 2500), links, flags, unread };
 })()
