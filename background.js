@@ -1,6 +1,6 @@
 // Service worker: pairing, the command loop, and the optional per-tab marking. Once the browser is paired the assistant may drive any tab of it (open,
 // read, screenshot, scroll, click, fill, switch tabs, visit any site); commands only come from the paired gateway and the server applies the real policy
-// (password / payment fields, typed confirmation for buy / send / submit / delete) before sending one.
+// (password / payment fields, an approval card in the paired app for buy / send / submit / delete) before sending one.
 let loopRunning = false;
 
 const get = async () => (await chrome.storage.local.get({ server: "", token: "", pair: null, granted: {} }));
